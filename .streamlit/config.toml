@@ -1,0 +1,3 @@
+[server]
+# Force Streamlit to treat your file as the installer file
+requirementsFile = "req.text"
