@@ -1,9 +1,20 @@
+import subprocess
+import sys
+
+# -------- AUTOMATIC CORE INSTALLER (BYPASSES REQUIREMENTS.TXT) --------
+try:
+    from rapidfuzz import fuzz, process
+except ModuleNotFoundError:
+    # Forces Streamlit's linux virtual server to download the dependencies
+    subprocess.check_call([sys.executable, "-m", "pip", "install", "rapidfuzz", "openpyxl"])
+    from rapidfuzz import fuzz, process
+
 import streamlit as st
 import pandas as pd
 import numpy as np
-from rapidfuzz import fuzz, process
 import io
 
+# Set page configuration
 st.set_page_config(page_title="Fuzzy Text Mapper Pro", page_icon="🧩", layout="wide")
 
 st.title("🧩 Automated String Mapping Dashboard")
@@ -21,7 +32,7 @@ with col2:
     mapping_file = st.file_uploader("Upload Mapping Patterns (.csv, .xlsx)", type=["csv", "xlsx"], key="map")
 
 if main_file and mapping_file:
-    # Read files based on extension
+    # Read files based on extension safely
     @st.cache_data(ttl=3600)
     def load_uploaded_data(file_obj):
         if file_obj.name.endswith(".csv"):
