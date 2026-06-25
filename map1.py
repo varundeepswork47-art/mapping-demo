@@ -155,172 +155,215 @@ if main_files and mapping_file:
             all_results = []
             file_status_info = []
             
-            progress_container = st.container()
+            # Overall progress bar
+            overall_progress_bar = st.progress(0)
+            overall_status_text = st.empty()
             
             for file_idx, main_file in enumerate(main_files, 1):
                 file_name = main_file.name
-                
-                with progress_container:
-                    st.write(f"📄 **Processing File {file_idx}/{len(main_files)}: {file_name}**")
+                overall_progress = (file_idx - 1) / len(main_files)
+                overall_status_text.write(f"📄 **Processing File {file_idx}/{len(main_files)}: {file_name}**")
                 
                 with st.status(f"Processing {file_name}...", expanded=False) as status:
                     
-                    # Load main file
-                    df_main = load_uploaded_data(main_file).copy()
-                    
-                    # Validate column exists
-                    if subject_col_name not in df_main.columns:
-                        st.error(f"❌ Column '{subject_col_name}' not found in {file_name}. Skipping this file.")
+                    try:
+                        # Load main file
+                        df_main = load_uploaded_data(main_file).copy()
+                        status.write(f"✓ File loaded: {len(df_main):,} rows")
+                        
+                        # Validate column exists
+                        if subject_col_name not in df_main.columns:
+                            st.error(f"❌ Column '{subject_col_name}' not found in {file_name}. Skipping this file.")
+                            file_status_info.append({
+                                "file": file_name,
+                                "status": "❌ Failed",
+                                "rows": 0,
+                                "reason": f"Column '{subject_col_name}' not found"
+                            })
+                            continue
+                        
+                        # Preprocessing
+                        status.write("🧼 Step 1/5: Cleaning and normalizing text keys...")
+                        step_progress = st.progress(0.0)
+                        
+                        df_map_temp = df_map.copy()
+                        df_map_temp['pattern_normalized'] = df_map_temp[pattern_col].astype(str).fillna('').str.strip()
+                        df_main['subject_normalized'] = df_main[subject_col_name].astype(str).fillna('').str.strip()
+                        
+                        step_progress.progress(0.5)
+                        
+                        # Apply case sensitivity
+                        if not case_sensitive:
+                            df_map_temp['pattern_normalized'] = df_map_temp['pattern_normalized'].str.lower()
+                            df_main['subject_normalized'] = df_main['subject_normalized'].str.lower()
+                        
+                        step_progress.progress(1.0)
+                        step_progress.empty()
+                        
+                        # Hash Lookup generation for selected output columns
+                        status.write("🧼 Step 2/5: Building lookup dictionary...")
+                        step_progress = st.progress(0.0)
+                        
+                        exact_match_dict = {}
+                        for idx, row in df_map_temp.iterrows():
+                            pattern_key = row['pattern_normalized']
+                            output_values = {col: row[col] for col in selected_output_cols}
+                            exact_match_dict[pattern_key] = output_values
+                        
+                        step_progress.progress(1.0)
+                        step_progress.empty()
+
+                        # Initialize results columns
+                        for col in selected_output_cols:
+                            df_main[f'mapped_{col}'] = None
+
+                        # --- STEP 1: EXACT MATCHING ---
+                        status.write("⚡ Step 3/5: Executing Direct Fast-Lookup (Exact Matching)...")
+                        step_progress = st.progress(0.0)
+                        
+                        patterns_items = list(exact_match_dict.items())
+                        
+                        def check_exact_match(subj):
+                            """Check for exact or substring matches based on user selection"""
+                            if pd.isna(subj) or subj == '':
+                                return {col: None for col in selected_output_cols}
+                            
+                            subj_str = str(subj).strip()
+                            if not case_sensitive:
+                                subj_str = subj_str.lower()
+                            
+                            for patt, output_dict in patterns_items:
+                                if patt == '' or patt is None:
+                                    continue
+                                
+                                match_found = False
+                                
+                                if exact_match_type == "Substring Match":
+                                    match_found = patt in subj_str
+                                elif exact_match_type == "Exact Match":
+                                    match_found = patt == subj_str
+                                elif exact_match_type == "Both":
+                                    match_found = (patt in subj_str) or (patt == subj_str)
+                                
+                                if match_found:
+                                    return output_dict
+                            
+                            return {col: None for col in selected_output_cols}
+
+                        # Apply matching with progress
+                        exact_results = []
+                        for idx, val in enumerate(df_main['subject_normalized']):
+                            exact_results.append(check_exact_match(val))
+                            if idx % max(1, len(df_main) // 100) == 0:
+                                step_progress.progress(min(1.0, idx / len(df_main)))
+                        
+                        step_progress.progress(1.0)
+                        step_progress.empty()
+                        
+                        for col in selected_output_cols:
+                            df_main[f'mapped_{col}'] = [r.get(col) for r in exact_results]
+
+                        # Count matches
+                        exact_matches_per_col = {col: (df_main[f'mapped_{col}'].notna()).sum() for col in selected_output_cols}
+                        unmatched_mask = df_main['mapped_' + selected_output_cols[0]].isna()
+                        unmatched_count = unmatched_mask.sum()
+
+                        status.write(f"✓ Exact Match Phase Closed")
+                        for col, count in exact_matches_per_col.items():
+                            status.write(f"  • {col}: {count:,} matches found")
+                        status.write(f"⚠️ Remainder to resolve via Fuzzy Distance calculations: {unmatched_count:,} rows.")
+
+                        # --- STEP 2: RAPIDFUZZ FUZZY MATCHING ---
+                        if unmatched_count > 0:
+                            status.write("🤖 Step 4/5: Spinning up RapidFuzz text vector alignment...")
+                            
+                            patterns_list = df_map_temp['pattern_normalized'].tolist()
+                            unmatched_indices = df_main[unmatched_mask].index
+                            
+                            # Pre-extract values
+                            subjects_unmatched = df_main.loc[unmatched_indices, 'subject_normalized'].values
+                            
+                            # Initialize fuzzy results
+                            fuzzy_results_dict = {col: [] for col in selected_output_cols}
+
+                            # Progress handling
+                            fuzzy_progress = st.progress(0.0)
+                            
+                            for idx, subj in enumerate(subjects_unmatched):
+                                best_match = process.extractOne(
+                                    subj,
+                                    patterns_list,
+                                    scorer=fuzz.token_set_ratio,
+                                    score_cutoff=fuzzy_threshold
+                                )
+                                
+                                if best_match:
+                                    m_pattern, score, _ = best_match
+                                    matched_outputs = exact_match_dict[m_pattern]
+                                    for col in selected_output_cols:
+                                        fuzzy_results_dict[col].append(matched_outputs.get(col))
+                                else:
+                                    for col in selected_output_cols:
+                                        fuzzy_results_dict[col].append("No Match")
+                                
+                                # Update progress occasionally
+                                if idx % max(1, unmatched_count // 100) == 0 and unmatched_count > 0:
+                                    fuzzy_progress.progress(min(1.0, float(idx / unmatched_count)))
+
+                            fuzzy_progress.empty()
+                            
+                            # Write back fuzzy results
+                            for col in selected_output_cols:
+                                df_main.loc[unmatched_indices, f'mapped_{col}'] = fuzzy_results_dict[col]
+
+                        # --- STEP 3: FINALIZING OUTPUT ---
+                        status.write("✅ Step 5/5: Finalizing output...")
+                        step_progress = st.progress(0.0)
+                        
+                        status.update(label=f"✅ {file_name} reconciled successfully!", state="complete")
+                        step_progress.progress(1.0)
+                        step_progress.empty()
+                        
+                        # Prepare output
+                        final_out = df_main[[subject_col_name]].copy()
+                        final_out.columns = [subject_col_name]
+                        
+                        for col in selected_output_cols:
+                            final_out[custom_output_names[col]] = df_main[f'mapped_{col}']
+                        
+                        all_results.append({
+                            'file_name': file_name,
+                            'dataframe': final_out,
+                            'row_count': len(final_out)
+                        })
+                        
+                        # Calculate statistics
+                        matched_overall = (df_main['mapped_' + selected_output_cols[0]].notna() & (df_main['mapped_' + selected_output_cols[0]] != "No Match")).sum()
+                        match_pct = (matched_overall / len(df_main) * 100) if len(df_main) > 0 else 0
+                        
                         file_status_info.append({
                             "file": file_name,
-                            "status": "❌ Failed",
-                            "rows": 0,
-                            "reason": f"Column '{subject_col_name}' not found"
+                            "status": "✅ Success",
+                            "rows": len(df_main),
+                            "matched": matched_overall,
+                            "match_pct": f"{match_pct:.1f}%"
                         })
-                        continue
                     
-                    status.write(f"✓ File loaded: {len(df_main):,} rows")
-                    
-                    # Preprocessing
-                    status.write("🧼 Cleaning and normalizing text keys...")
-                    
-                    df_map_temp = df_map.copy()
-                    df_map_temp['pattern_normalized'] = df_map_temp[pattern_col].astype(str).fillna('').str.strip()
-                    df_main['subject_normalized'] = df_main[subject_col_name].astype(str).fillna('').str.strip()
-                    
-                    # Apply case sensitivity
-                    if not case_sensitive:
-                        df_map_temp['pattern_normalized'] = df_map_temp['pattern_normalized'].str.lower()
-                        df_main['subject_normalized'] = df_main['subject_normalized'].str.lower()
-                    
-                    # Hash Lookup generation for selected output columns
-                    exact_match_dict = {}
-                    for idx, row in df_map_temp.iterrows():
-                        pattern_key = row['pattern_normalized']
-                        output_values = {col: row[col] for col in selected_output_cols}
-                        exact_match_dict[pattern_key] = output_values
+                    except Exception as e:
+                        st.error(f"❌ Error processing {file_name}: {str(e)}")
+                        file_status_info.append({
+                            "file": file_name,
+                            "status": "❌ Error",
+                            "rows": 0,
+                            "reason": str(e)
+                        })
+                
+                # Update overall progress
+                overall_progress = file_idx / len(main_files)
+                overall_progress_bar.progress(overall_progress)
 
-                    # Initialize results columns
-                    for col in selected_output_cols:
-                        df_main[f'mapped_{col}'] = None
-
-                    # --- STEP 1: EXACT MATCHING ---
-                    status.write("⚡ Step 1: Executing Direct Fast-Lookup (Exact Matching)...")
-                    
-                    patterns_items = list(exact_match_dict.items())
-                    
-                    def check_exact_match(subj):
-                        """Check for exact or substring matches based on user selection"""
-                        if pd.isna(subj) or subj == '':
-                            return {col: None for col in selected_output_cols}
-                        
-                        subj_str = str(subj).strip()
-                        if not case_sensitive:
-                            subj_str = subj_str.lower()
-                        
-                        for patt, output_dict in patterns_items:
-                            if patt == '' or patt is None:
-                                continue
-                            
-                            match_found = False
-                            
-                            if exact_match_type == "Substring Match":
-                                match_found = patt in subj_str
-                            elif exact_match_type == "Exact Match":
-                                match_found = patt == subj_str
-                            elif exact_match_type == "Both":
-                                match_found = (patt in subj_str) or (patt == subj_str)
-                            
-                            if match_found:
-                                return output_dict
-                        
-                        return {col: None for col in selected_output_cols}
-
-                    # Apply matching
-                    exact_results = df_main['subject_normalized'].apply(check_exact_match)
-                    
-                    for col in selected_output_cols:
-                        df_main[f'mapped_{col}'] = [r.get(col) for r in exact_results]
-
-                    # Count matches
-                    exact_matches_per_col = {col: (df_main[f'mapped_{col}'].notna()).sum() for col in selected_output_cols}
-                    unmatched_mask = df_main['mapped_' + selected_output_cols[0]].isna()
-                    unmatched_count = unmatched_mask.sum()
-
-                    status.write(f"✓ Exact Match Phase Closed")
-                    for col, count in exact_matches_per_col.items():
-                        status.write(f"  • {col}: {count:,} matches found")
-                    status.write(f"⚠️ Remainder to resolve via Fuzzy Distance calculations: {unmatched_count:,} rows.")
-
-                    # --- STEP 2: RAPIDFUZZ FUZZY MATCHING ---
-                    if unmatched_count > 0:
-                        status.write("🤖 Step 2: Spinning up RapidFuzz text vector alignment...")
-                        
-                        patterns_list = df_map_temp['pattern_normalized'].tolist()
-                        unmatched_indices = df_main[unmatched_mask].index
-                        
-                        # Pre-extract values
-                        subjects_unmatched = df_main.loc[unmatched_indices, 'subject_normalized'].values
-                        
-                        # Initialize fuzzy results
-                        fuzzy_results_dict = {col: [] for col in selected_output_cols}
-
-                        # Progress handling
-                        p_bar = st.progress(0.0)
-                        
-                        for idx, subj in enumerate(subjects_unmatched):
-                            best_match = process.extractOne(
-                                subj,
-                                patterns_list,
-                                scorer=fuzz.token_set_ratio,
-                                score_cutoff=fuzzy_threshold
-                            )
-                            
-                            if best_match:
-                                m_pattern, score, _ = best_match
-                                matched_outputs = exact_match_dict[m_pattern]
-                                for col in selected_output_cols:
-                                    fuzzy_results_dict[col].append(matched_outputs.get(col))
-                            else:
-                                for col in selected_output_cols:
-                                    fuzzy_results_dict[col].append("No Match")
-                            
-                            # Update progress occasionally
-                            if idx % max(1, unmatched_count // 100) == 0 and unmatched_count > 0:
-                                p_bar.progress(min(1.0, float(idx / unmatched_count)))
-
-                        p_bar.empty()
-                        
-                        # Write back fuzzy results
-                        for col in selected_output_cols:
-                            df_main.loc[unmatched_indices, f'mapped_{col}'] = fuzzy_results_dict[col]
-
-                    status.update(label=f"✅ {file_name} reconciled successfully!", state="complete")
-                    
-                    # Prepare output
-                    final_out = df_main[[subject_col_name]].copy()
-                    final_out.columns = [subject_col_name]
-                    
-                    for col in selected_output_cols:
-                        final_out[custom_output_names[col]] = df_main[f'mapped_{col}']
-                    
-                    all_results.append({
-                        'file_name': file_name,
-                        'dataframe': final_out,
-                        'row_count': len(final_out)
-                    })
-                    
-                    # Calculate statistics
-                    matched_overall = (df_main['mapped_' + selected_output_cols[0]].notna() & (df_main['mapped_' + selected_output_cols[0]] != "No Match")).sum()
-                    match_pct = (matched_overall / len(df_main) * 100) if len(df_main) > 0 else 0
-                    
-                    file_status_info.append({
-                        "file": file_name,
-                        "status": "✅ Success",
-                        "rows": len(df_main),
-                        "matched": matched_overall,
-                        "match_pct": f"{match_pct:.1f}%"
-                    })
+            overall_progress_bar.progress(1.0)
+            overall_status_text.write(f"✅ **All {len(main_files)} file(s) processed!**")
 
             # --- DISPLAY RESULTS SUMMARY ---
             if all_results:
