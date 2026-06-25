@@ -59,7 +59,7 @@ if main_file and mapping_file:
         lob_col = st.selectbox("LOB Output Column", options=df_map.columns, index=2 if len(df_map.columns) > 2 else 0)
 
     # --- PROCESSING TRIGGER ---
-    if st.button("Run 10 Lakh Row Scaled Mapping Engine", type="primary"):
+    if st.button("Run Mapping Engine", type="primary"):
         
         with st.status("Initializing High Performance Compute Matrix...", expanded=True) as status:
             
@@ -71,10 +71,10 @@ if main_file and mapping_file:
             # Hash Lookup generation
             exact_match_dict = dict(zip(df_map['pattern_lower'], zip(df_map[stage_col], df_map[lob_col])))
 
-            # Initialize results
-            df_main['mapped_category'] = None
-            df_main['mapped_lob'] = None
-            df_main['match_type'] = None
+            # Initialize results with proper dtype (object for strings)
+            df_main['mapped_category'] = pd.Series(dtype='object')
+            df_main['mapped_lob'] = pd.Series(dtype='object')
+            df_main['match_type'] = pd.Series(dtype='object')
 
             # --- STEP 1: VECTORIZED EXACT MATCHING ---
             status.write("⚡ Step 1: Executing Direct Fast-Lookup (Exact Substring Hash Routing)...")
@@ -144,10 +144,10 @@ if main_file and mapping_file:
 
                 p_bar.empty()
                 
-                # Write back remaining arrays
-                df_main.loc[unmatched_indices, 'mapped_category'] = cat_outs
-                df_main.loc[unmatched_indices, 'mapped_lob'] = lob_outs
-                df_main.loc[unmatched_indices, 'match_type'] = type_outs
+                # Write back remaining arrays using reset_index to avoid index mismatch
+                df_main.loc[unmatched_indices, 'mapped_category'] = pd.Series(cat_outs, index=unmatched_indices)
+                df_main.loc[unmatched_indices, 'mapped_lob'] = pd.Series(lob_outs, index=unmatched_indices)
+                df_main.loc[unmatched_indices, 'match_type'] = pd.Series(type_outs, index=unmatched_indices)
 
             status.update(label="✅ All data arrays reconciled successfully!", state="complete")
 
@@ -178,7 +178,7 @@ if main_file and mapping_file:
         st.download_button(
             label="📥 Download Structured CSV Report",
             data=csv_data,
-            file_name="reconciled_dropoff_dataset.csv",
+            file_name="mapped_dataset.csv",
             mime="text/csv",
             use_container_width=True
         )
