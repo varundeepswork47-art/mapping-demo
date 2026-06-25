@@ -59,7 +59,7 @@ if main_file and mapping_file:
         lob_col = st.selectbox("LOB Output Column", options=df_map.columns, index=2 if len(df_map.columns) > 2 else 0)
 
     # --- PROCESSING TRIGGER ---
-    if st.button("🔥 Run 10 Lakh Row Scaled Mapping Engine", type="primary"):
+    if st.button("Run 10 Lakh Row Scaled Mapping Engine", type="primary"):
         
         with st.status("Initializing High Performance Compute Matrix...", expanded=True) as status:
             
