@@ -20,6 +20,12 @@ from openpyxl.styles import PatternFill, Font, Alignment
 # Set page configuration
 st.set_page_config(page_title="Fuzzy Text Mapper Pro", page_icon="🧩", layout="wide")
 
+# Initialize session state for results persistence
+if 'mapping_results' not in st.session_state:
+    st.session_state.mapping_results = None
+if 'file_status' not in st.session_state:
+    st.session_state.file_status = None
+
 st.title("🧩 Automated String Mapping Dashboard")
 st.markdown("Upload your Main File(s) and a Mapping Reference File to reconcile text values using exact and fuzzy matching algorithms.")
 
@@ -367,155 +373,162 @@ if main_files and mapping_file:
 
             overall_progress_bar.progress(1.0)
             overall_status_text.write(f"✅ **All {len(main_files)} file(s) processed!**")
+            
+            # Store results in session state
+            st.session_state.mapping_results = all_results
+            st.session_state.file_status = file_status_info
 
-            # --- DISPLAY RESULTS SUMMARY ---
-            if all_results:
-                st.success("📊 Batch Processing Complete!")
-                
-                st.subheader("📈 Processing Summary")
-                summary_df = pd.DataFrame(file_status_info)
-                st.dataframe(summary_df, use_container_width=True, hide_index=True)
-                
-                # --- INDIVIDUAL FILE PREVIEWS & DOWNLOADS ---
-                st.subheader("👀 Preview & Download Results")
-                
-                download_files = []
-                
-                for result in all_results:
-                    with st.expander(f"📄 {result['file_name']} - {result['row_count']:,} rows"):
-                        st.dataframe(result['dataframe'].head(15), use_container_width=True)
-                        
-                        # Individual file download
-                        csv_buffer = io.StringIO()
-                        result['dataframe'].to_csv(csv_buffer, index=False)
-                        csv_data = csv_buffer.getvalue()
-                        
-                        st.download_button(
-                            label=f"📥 Download {result['file_name'].split('.')[0]}_mapped.csv",
-                            data=csv_data,
-                            file_name=f"{result['file_name'].split('.')[0]}_mapped.csv",
-                            mime="text/csv",
-                            key=f"download_{result['file_name']}"
-                        )
-                        
-                        download_files.append({
-                            'file_name': f"{result['file_name'].split('.')[0]}_mapped.csv",
-                            'data': csv_data
-                        })
-                
-                # --- BATCH DOWNLOAD AS ZIP ---
-                if len(all_results) > 1:
-                    st.subheader("📦 Batch Download")
+        # --- PERSIST & RENDER RESULTS FROM SESSION STATE ---
+        if st.session_state.mapping_results:
+            all_results = st.session_state.mapping_results
+            file_status_info = st.session_state.file_status
+
+            st.success("📊 Batch Processing Complete!")
+            
+            st.subheader("📈 Processing Summary")
+            summary_df = pd.DataFrame(file_status_info)
+            st.dataframe(summary_df, use_container_width=True, hide_index=True)
+            
+            # --- INDIVIDUAL FILE PREVIEWS & DOWNLOADS ---
+            st.subheader("👀 Preview & Download Results")
+            
+            download_files = []
+            
+            for result in all_results:
+                with st.expander(f"📄 {result['file_name']} - {result['row_count']:,} rows"):
+                    st.dataframe(result['dataframe'].head(15), use_container_width=True)
                     
-                    zip_buffer = io.BytesIO()
-                    with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
-                        for file_info in download_files:
-                            zip_file.writestr(file_info['file_name'], file_info['data'])
-                    
-                    zip_buffer.seek(0)
+                    # Individual file download
+                    csv_buffer = io.StringIO()
+                    result['dataframe'].to_csv(csv_buffer, index=False)
+                    csv_data = csv_buffer.getvalue()
                     
                     st.download_button(
-                        label="📦 Download All Files as ZIP",
-                        data=zip_buffer.getvalue(),
-                        file_name=f"mapped_data_batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
-                        mime="application/zip",
-                        use_container_width=True
+                        label=f"📥 Download {result['file_name'].split('.')[0]}_mapped.csv",
+                        data=csv_data,
+                        file_name=f"{result['file_name'].split('.')[0]}_mapped.csv",
+                        mime="text/csv",
+                        key=f"download_{result['file_name']}"
                     )
+                    
+                    download_files.append({
+                        'file_name': f"{result['file_name'].split('.')[0]}_mapped.csv",
+                        'data': csv_data
+                    })
+            
+            # --- BATCH DOWNLOAD AS ZIP ---
+            if len(all_results) > 1:
+                st.subheader("📦 Batch Download")
                 
-                # --- SUMMARY DASHBOARD ---
-                st.subheader("📊 Summary Dashboard")
-                st.info("Select columns from your mapped output to generate summary statistics")
+                zip_buffer = io.BytesIO()
+                with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
+                    for file_info in download_files:
+                        zip_file.writestr(file_info['file_name'], file_info['data'])
                 
-                # Get all columns from output dataframe
-                output_columns = list(all_results[0]['dataframe'].columns) if all_results else []
+                zip_buffer.seek(0)
                 
-                # Allow user to select columns for summary
-                selected_summary_cols = st.multiselect(
-                    "Select columns for summary (combination counts)",
-                    options=output_columns,
-                    default=output_columns[:min(3, len(output_columns))],
-                    key="summary_cols_select"
+                st.download_button(
+                    label="📦 Download All Files as ZIP",
+                    data=zip_buffer.getvalue(),
+                    file_name=f"mapped_data_batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
+                    mime="application/zip",
+                    use_container_width=True
                 )
-                
-                if selected_summary_cols:
-                    if st.button("Generate Summary Dashboard", type="secondary"):
-                        # Create combination statistics
-                        combo_stats = []
+            
+            # --- SUMMARY DASHBOARD ---
+            st.subheader("📊 Summary Dashboard")
+            st.info("Select columns from your mapped output to generate summary statistics")
+            
+            # Get all columns from output dataframe
+            output_columns = list(all_results[0]['dataframe'].columns) if all_results else []
+            
+            # Allow user to select columns for summary
+            selected_summary_cols = st.multiselect(
+                "Select columns for summary (combination counts)",
+                options=output_columns,
+                default=output_columns[:min(3, len(output_columns))],
+                key="summary_cols_select"
+            )
+            
+            if selected_summary_cols:
+                if st.button("Generate Summary Dashboard", type="secondary"):
+                    # Create combination statistics
+                    combo_stats = []
+                    
+                    for result in all_results:
+                        temp_df = result['dataframe'].copy()
                         
-                        for result in all_results:
-                            temp_df = result['dataframe'].copy()
-                            
-                            # Group by selected columns and count
-                            grouped = temp_df.groupby(selected_summary_cols, dropna=False).size().reset_index(name='Count')
-                            grouped['File'] = result['file_name']
-                            combo_stats.append(grouped)
+                        # Group by selected columns and count
+                        grouped = temp_df.groupby(selected_summary_cols, dropna=False).size().reset_index(name='Count')
+                        grouped['File'] = result['file_name']
+                        combo_stats.append(grouped)
+                    
+                    if combo_stats:
+                        summary_dashboard_df = pd.concat(combo_stats, ignore_index=True)
                         
-                        if combo_stats:
-                            summary_dashboard_df = pd.concat(combo_stats, ignore_index=True)
+                        st.dataframe(summary_dashboard_df, use_container_width=True, hide_index=True)
+                        
+                        # --- DOWNLOAD SUMMARY DASHBOARD AS EXCEL ---
+                        def create_summary_excel():
+                            excel_buffer = io.BytesIO()
                             
-                            st.dataframe(summary_dashboard_df, use_container_width=True, hide_index=True)
-                            
-                            # --- DOWNLOAD SUMMARY DASHBOARD AS EXCEL ---
-                            def create_summary_excel():
-                                excel_buffer = io.BytesIO()
+                            with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
+                                summary_dashboard_df.to_excel(writer, sheet_name='Combination Counts', index=False)
                                 
-                                with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                                    summary_dashboard_df.to_excel(writer, sheet_name='Combination Counts', index=False)
-                                    
-                                    # Style the header row
-                                    worksheet = writer.sheets['Combination Counts']
-                                    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-                                    header_font = Font(bold=True, color="FFFFFF")
-                                    
-                                    for cell in worksheet[1]:
-                                        cell.fill = header_fill
-                                        cell.font = header_font
-                                        cell.alignment = Alignment(horizontal="center", vertical="center")
-                                    
-                                    # Adjust column widths
-                                    for column in worksheet.columns:
-                                        max_length = 0
-                                        column_letter = column[0].column_letter
-                                        for cell in column:
-                                            try:
-                                                if len(str(cell.value)) > max_length:
-                                                    max_length = len(str(cell.value))
-                                            except:
-                                                pass
-                                        adjusted_width = (max_length + 2)
-                                        worksheet.column_dimensions[column_letter].width = adjusted_width
+                                # Style the header row
+                                worksheet = writer.sheets['Combination Counts']
+                                header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+                                header_font = Font(bold=True, color="FFFFFF")
                                 
-                                excel_buffer.seek(0)
-                                return excel_buffer.getvalue()
+                                for cell in worksheet[1]:
+                                    cell.fill = header_fill
+                                    cell.font = header_font
+                                    cell.alignment = Alignment(horizontal="center", vertical="center")
+                                
+                                # Adjust column widths
+                                for column in worksheet.columns:
+                                    max_length = 0
+                                    column_letter = column[0].column_letter
+                                    for cell in column:
+                                        try:
+                                            if len(str(cell.value)) > max_length:
+                                                max_length = len(str(cell.value))
+                                        except:
+                                            pass
+                                    adjusted_width = (max_length + 2)
+                                    worksheet.column_dimensions[column_letter].width = adjusted_width
                             
-                            excel_data = create_summary_excel()
-                            
-                            st.download_button(
-                                label="📊 Download Summary Dashboard (Excel)",
-                                data=excel_data,
-                                file_name=f"summary_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                                mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-                                use_container_width=True
-                            )
-                
-                # --- DETAILED STATISTICS ---
-                st.subheader("📋 Detailed Settings Used")
-                settings_col1, settings_col2 = st.columns(2)
-                
-                with settings_col1:
-                    st.info("**Matching Configuration:**")
-                    st.write(f"""
-                    - Fuzzy Threshold: **{fuzzy_threshold}%**
-                    - Match Type: **{exact_match_type}**
-                    - Case Sensitive: **{case_sensitive}**
-                    """)
-                
-                with settings_col2:
-                    st.info("**Column Mapping:**")
-                    st.write(f"""
-                    - Subject Column: **{subject_col_name}**
-                    - Pattern Column: **{pattern_col}**
-                    - Output Columns: **{', '.join(selected_output_cols)}**
-                    """)
+                            excel_buffer.seek(0)
+                            return excel_buffer.getvalue()
+                        
+                        excel_data = create_summary_excel()
+                        
+                        st.download_button(
+                            label="📊 Download Summary Dashboard (Excel)",
+                            data=excel_data,
+                            file_name=f"summary_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
+                            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                            use_container_width=True
+                        )
+            
+            # --- DETAILED STATISTICS ---
+            st.subheader("📋 Detailed Settings Used")
+            settings_col1, settings_col2 = st.columns(2)
+            
+            with settings_col1:
+                st.info("**Matching Configuration:**")
+                st.write(f"""
+                - Fuzzy Threshold: **{fuzzy_threshold}%**
+                - Match Type: **{exact_match_type}**
+                - Case Sensitive: **{case_sensitive}**
+                """)
+            
+            with settings_col2:
+                st.info("**Column Mapping:**")
+                st.write(f"""
+                - Subject Column: **{subject_col_name}**
+                - Pattern Column: **{pattern_col}**
+                - Output Columns: **{', '.join(selected_output_cols)}**
+                """)
     else:
         st.warning("Please select at least one output column from your mapping file.")
