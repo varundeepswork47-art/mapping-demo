@@ -15,8 +15,6 @@ import numpy as np
 import io
 import zipfile
 from datetime import datetime
-from openpyxl import Workbook
-from openpyxl.styles import PatternFill, Font, Alignment, Border, Side
 
 # Set page configuration
 st.set_page_config(page_title="Fuzzy Text Mapper Pro", page_icon="🧩", layout="wide")
@@ -156,7 +154,6 @@ if main_files and mapping_file:
             # Process each file
             all_results = []
             file_status_info = []
-            all_combination_data = []
             
             # Overall progress bar
             overall_progress_bar = st.progress(0)
@@ -172,7 +169,6 @@ if main_files and mapping_file:
                     try:
                         # Load main file
                         df_main = load_uploaded_data(main_file).copy()
-                        df_main_original = df_main.copy()  # Keep original for merging later
                         status.write(f"✓ File loaded: {len(df_main):,} rows")
                         
                         # Validate column exists
@@ -328,20 +324,12 @@ if main_files and mapping_file:
                         step_progress.progress(1.0)
                         step_progress.empty()
                         
-                        # --- BUILD FINAL OUTPUT WITH ALL ORIGINAL COLUMNS ---
-                        final_out = df_main_original.copy()
+                        # Prepare output
+                        final_out = df_main[[subject_col_name]].copy()
+                        final_out.columns = [subject_col_name]
                         
-                        # Find and replace the subject column with mapped columns
-                        # Get the position of subject_col_name
-                        col_position = list(final_out.columns).index(subject_col_name)
-                        
-                        # Remove the original subject column
-                        final_out = final_out.drop(columns=[subject_col_name])
-                        
-                        # Insert mapped columns at the original position
-                        for idx, col in enumerate(selected_output_cols):
-                            mapped_col_name = custom_output_names[col]
-                            final_out.insert(col_position + idx, mapped_col_name, df_main[f'mapped_{col}'])
+                        for col in selected_output_cols:
+                            final_out[custom_output_names[col]] = df_main[f'mapped_{col}']
                         
                         all_results.append({
                             'file_name': file_name,
@@ -428,69 +416,6 @@ if main_files and mapping_file:
                         data=zip_buffer.getvalue(),
                         file_name=f"mapped_data_batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
                         mime="application/zip",
-                        use_container_width=True
-                    )
-                
-                # --- SUMMARY DASHBOARD ---
-                st.subheader("📊 Summary Dashboard")
-                
-                # Create combination statistics
-                combo_stats = []
-                
-                for result in all_results:
-                    temp_df = result['dataframe'].copy()
-                    combo_cols = [custom_output_names[col] for col in selected_output_cols]
-                    
-                    # Group by all mapped columns and count
-                    grouped = temp_df.groupby(combo_cols, dropna=False).size().reset_index(name='Count')
-                    grouped['File'] = result['file_name']
-                    combo_stats.append(grouped)
-                
-                if combo_stats:
-                    summary_dashboard_df = pd.concat(combo_stats, ignore_index=True)
-                    
-                    st.dataframe(summary_dashboard_df, use_container_width=True, hide_index=True)
-                    
-                    # --- DOWNLOAD SUMMARY DASHBOARD AS EXCEL ---
-                    def create_summary_excel():
-                        excel_buffer = io.BytesIO()
-                        
-                        with pd.ExcelWriter(excel_buffer, engine='openpyxl') as writer:
-                            summary_dashboard_df.to_excel(writer, sheet_name='Combination Counts', index=False)
-                            
-                            # Style the header row
-                            worksheet = writer.sheets['Combination Counts']
-                            header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
-                            header_font = Font(bold=True, color="FFFFFF")
-                            
-                            for cell in worksheet[1]:
-                                cell.fill = header_fill
-                                cell.font = header_font
-                                cell.alignment = Alignment(horizontal="center", vertical="center")
-                            
-                            # Adjust column widths
-                            for column in worksheet.columns:
-                                max_length = 0
-                                column_letter = column[0].column_letter
-                                for cell in column:
-                                    try:
-                                        if len(str(cell.value)) > max_length:
-                                            max_length = len(str(cell.value))
-                                    except:
-                                        pass
-                                adjusted_width = (max_length + 2)
-                                worksheet.column_dimensions[column_letter].width = adjusted_width
-                        
-                        excel_buffer.seek(0)
-                        return excel_buffer.getvalue()
-                    
-                    excel_data = create_summary_excel()
-                    
-                    st.download_button(
-                        label="📊 Download Summary Dashboard (Excel)",
-                        data=excel_data,
-                        file_name=f"summary_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
-                        mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
                         use_container_width=True
                     )
                 
