@@ -26,7 +26,7 @@ if 'mapping_results' not in st.session_state:
 if 'file_status' not in st.session_state:
     st.session_state.file_status = None
 
-st.title("🧩 Automated String Mapping Dashboard")
+st.title("String Mapping Dashboard")
 st.markdown("Upload your Main File(s) and a Mapping Reference File to reconcile text values using exact and fuzzy matching algorithms.")
 
 # --- FILE UPLOAD SECTION ---
@@ -34,7 +34,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("1. Load Main File(s)")
-    st.info("📤 Upload up to 13 files (.csv, .xlsx) - all with same header structure")
+    st.info("Upload up to 13 files (.csv, .xlsx) - all with same header structure")
     main_files = st.file_uploader(
         "Upload Main Sheet(s)",
         type=["csv", "xlsx"],
@@ -46,11 +46,11 @@ with col1:
     if main_files and len(main_files) > 13:
         st.error(f"❌ You uploaded {len(main_files)} files. Maximum allowed is 13 files. Please remove {len(main_files) - 13} file(s).")
         main_files = main_files[:13]
-        st.info(f"✂️ Trimmed to first 13 files.")
+        st.info(f" Trimmed to first 13 files.")
 
 with col2:
     st.subheader("2. Load Mapping Reference File")
-    st.info("📋 Upload only 1 mapping file (will be used for all main files)")
+    st.info(" Upload only 1 mapping file (will be used for all main files)")
     mapping_file = st.file_uploader("Upload Mapping Patterns (.csv, .xlsx)", type=["csv", "xlsx"], key="map")
 
 if main_files and mapping_file:
@@ -65,16 +65,16 @@ if main_files and mapping_file:
     df_map = load_uploaded_data(mapping_file).copy()
     
     # Display file info
-    st.success(f"🎉 Successfully loaded {len(main_files)} main file(s) and mapping reference file!")
-    st.info(f"📊 Mapping file size: {len(df_map):,} rows")
+    st.success(f" Successfully loaded {len(main_files)} main file(s) and mapping reference file!")
+    st.info(f" Mapping file size: {len(df_map):,} rows")
     
     # Show list of uploaded files
-    with st.expander("📂 View Uploaded Files"):
+    with st.expander(" View Uploaded Files"):
         for idx, file in enumerate(main_files, 1):
             st.write(f"{idx}. **{file.name}**")
 
     # --- COLUMN MAPPER SELECTION (USER VISIBILITY) ---
-    st.subheader("⚙️ Map Your Column Fields")
+    st.subheader(" Map Your Column Fields")
     
     col_sel1, col_sel2 = st.columns(2)
     
@@ -94,7 +94,7 @@ if main_files and mapping_file:
         pattern_col = st.selectbox("Pattern Column (Map File)", options=df_map.columns, index=0 if len(df_map.columns) > 0 else 0)
 
     # --- DYNAMIC OUTPUT COLUMN SELECTION ---
-    st.subheader("📊 Select Output Mapping Columns")
+    st.subheader(" Select Output Mapping Columns")
     
     available_output_cols = [col for col in df_map.columns if col != pattern_col]
     
@@ -110,7 +110,7 @@ if main_files and mapping_file:
 
     # --- CUSTOMIZABLE OUTPUT COLUMN NAMES ---
     if selected_output_cols:
-        st.subheader("📋 Customize Output Column Names")
+        st.subheader(" Customize Output Column Names")
         
         custom_output_names = {}
         cols_per_row = 2
@@ -126,7 +126,7 @@ if main_files and mapping_file:
                 custom_output_names[col] = custom_name
 
         # --- MATCHING ALGORITHM SETTINGS ---
-        st.subheader("⚙️ Matching Algorithm Settings")
+        st.subheader(" Matching Algorithm Settings")
         
         algo_col1, algo_col2, algo_col3 = st.columns(3)
         
@@ -191,7 +191,7 @@ if main_files and mapping_file:
                             continue
                         
                         # Preprocessing
-                        status.write("🧼 Step 1/5: Cleaning and normalizing text keys...")
+                        status.write(" Step 1/5: Cleaning and normalizing text keys...")
                         step_progress = st.progress(0.0)
                         
                         df_map_temp = df_map.copy()
@@ -209,7 +209,7 @@ if main_files and mapping_file:
                         step_progress.empty()
                         
                         # Hash Lookup generation for selected output columns
-                        status.write("🧼 Step 2/5: Building lookup dictionary...")
+                        status.write(" Step 2/5: Building lookup dictionary...")
                         step_progress = st.progress(0.0)
                         
                         exact_match_dict = {}
@@ -226,11 +226,12 @@ if main_files and mapping_file:
                             df_main[f'mapped_{col}'] = None
 
                         # --- STEP 1: EXACT MATCHING ---
-                        status.write("⚡ Step 3/5: Executing Direct Fast-Lookup (Exact Matching)...")
+                        status.write(" Step 3/5: Executing Direct Fast-Lookup (Exact Matching)...")
                         step_progress = st.progress(0.0)
                         
                         patterns_items = list(exact_match_dict.items())
                         
+
                         def check_exact_match(subj):
                             """Check for exact or substring matches based on user selection"""
                             if pd.isna(subj) or subj == '':
@@ -279,11 +280,11 @@ if main_files and mapping_file:
                         status.write(f"✓ Exact Match Phase Closed")
                         for col, count in exact_matches_per_col.items():
                             status.write(f"  • {col}: {count:,} matches found")
-                        status.write(f"⚠️ Remainder to resolve via Fuzzy Distance calculations: {unmatched_count:,} rows.")
+                        status.write(f" Remainder to resolve via Fuzzy Distance calculations: {unmatched_count:,} rows.")
 
                         # --- STEP 2: RAPIDFUZZ FUZZY MATCHING ---
                         if unmatched_count > 0:
-                            status.write("🤖 Step 4/5: Spinning up RapidFuzz text vector alignment...")
+                            status.write(" Step 4/5: Spinning up RapidFuzz text vector alignment...")
                             
                             patterns_list = df_map_temp['pattern_normalized'].tolist()
                             unmatched_indices = df_main[unmatched_mask].index
@@ -325,7 +326,7 @@ if main_files and mapping_file:
                                 df_main.loc[unmatched_indices, f'mapped_{col}'] = fuzzy_results_dict[col]
 
                         # --- STEP 3: FINALIZING OUTPUT ---
-                        status.write("✅ Step 5/5: Finalizing output...")
+                        status.write(" Step 5/5: Finalizing output...")
                         step_progress = st.progress(0.0)
                         
                         status.update(label=f"✅ {file_name} reconciled successfully!", state="complete")
@@ -383,19 +384,19 @@ if main_files and mapping_file:
             all_results = st.session_state.mapping_results
             file_status_info = st.session_state.file_status
 
-            st.success("📊 Batch Processing Complete!")
+            st.success(" Batch Processing Complete!")
             
-            st.subheader("📈 Processing Summary")
+            st.subheader(" Processing Summary")
             summary_df = pd.DataFrame(file_status_info)
             st.dataframe(summary_df, use_container_width=True, hide_index=True)
             
             # --- INDIVIDUAL FILE PREVIEWS & DOWNLOADS ---
-            st.subheader("👀 Preview & Download Results")
+            st.subheader(" Preview & Download Results")
             
             download_files = []
             
             for result in all_results:
-                with st.expander(f"📄 {result['file_name']} - {result['row_count']:,} rows"):
+                with st.expander(f" {result['file_name']} - {result['row_count']:,} rows"):
                     st.dataframe(result['dataframe'].head(15), use_container_width=True)
                     
                     # Individual file download
@@ -418,7 +419,7 @@ if main_files and mapping_file:
             
             # --- BATCH DOWNLOAD AS ZIP ---
             if len(all_results) > 1:
-                st.subheader("📦 Batch Download")
+                st.subheader(" Batch Download")
                 
                 zip_buffer = io.BytesIO()
                 with zipfile.ZipFile(zip_buffer, 'w', zipfile.ZIP_DEFLATED) as zip_file:
@@ -428,7 +429,7 @@ if main_files and mapping_file:
                 zip_buffer.seek(0)
                 
                 st.download_button(
-                    label="📦 Download All Files as ZIP",
+                    label=" Download All Files as ZIP",
                     data=zip_buffer.getvalue(),
                     file_name=f"mapped_data_batch_{datetime.now().strftime('%Y%m%d_%H%M%S')}.zip",
                     mime="application/zip",
@@ -504,7 +505,7 @@ if main_files and mapping_file:
                         excel_data = create_summary_excel()
                         
                         st.download_button(
-                            label="📊 Download Summary Dashboard (Excel)",
+                            label=" Download Summary Dashboard (Excel)",
                             data=excel_data,
                             file_name=f"summary_dashboard_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx",
                             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
