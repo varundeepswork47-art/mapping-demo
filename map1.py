@@ -513,7 +513,7 @@ if main_files and mapping_file:
                         )
             
             # --- DETAILED STATISTICS ---
-            st.subheader("📋 Detailed Settings Used")
+            st.subheader("Detailed Settings Used")
             settings_col1, settings_col2 = st.columns(2)
             
             with settings_col1:
