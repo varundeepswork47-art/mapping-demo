@@ -62,7 +62,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("1. Load Main File(s)")
-    st.info("Upload up to 13 files (.csv, .xlsx) - all with same header structure")
+    st.info("Upload (.csv, .xlsx) - all with same header structure")
     main_files = st.file_uploader(
         "Upload Main Sheet(s)",
         type=["csv", "xlsx"],
