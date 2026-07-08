@@ -29,6 +29,34 @@ if 'file_status' not in st.session_state:
 st.title("String Mapping Dashboard")
 st.markdown("Upload your Main File(s) and a Mapping Reference File to reconcile text values using exact and fuzzy matching algorithms.")
 
+
+# --- NORMALIZATION HELPER (FIX FOR NUMERIC / TEMPLATE ID MATCHING) ---
+def normalize_value(val):
+    """
+    Normalize a value to a clean string for matching.
+
+    Fixes two common issues with numeric ID columns (e.g. template IDs):
+    1. Pandas upcasts int columns to float when any blank cell is present,
+       turning "12345" into "12345.0". This strips that artifact back off.
+    2. Guards against NaN/None/empty values.
+
+    Note: this cannot recover leading zeros (e.g. "007") that were already
+    lost because the column was read as numeric. That must be fixed at
+    load time by reading the column as a string (see dtype=str below).
+    """
+    if val is None:
+        return ''
+    if isinstance(val, float):
+        if pd.isna(val):
+            return ''
+        if val.is_integer():
+            return str(int(val))
+        return str(val)
+    if pd.isna(val):
+        return ''
+    return str(val).strip()
+
+
 # --- FILE UPLOAD SECTION ---
 col1, col2 = st.columns(2)
 
@@ -54,12 +82,15 @@ with col2:
     mapping_file = st.file_uploader("Upload Mapping Patterns (.csv, .xlsx)", type=["csv", "xlsx"], key="map")
 
 if main_files and mapping_file:
-    # Read files based on extension safely
+    # Read files based on extension safely.
+    # dtype=str forces every column to be read as text, so numeric ID
+    # columns (e.g. template IDs) never get silently converted to float
+    # (e.g. 12345 -> 12345.0) and leading zeros (e.g. "007") are preserved.
     @st.cache_data(ttl=3600)
     def load_uploaded_data(file_obj):
         if file_obj.name.endswith(".csv"):
-            return pd.read_csv(file_obj)
-        return pd.read_excel(file_obj)
+            return pd.read_csv(file_obj, dtype=str)
+        return pd.read_excel(file_obj, dtype=str)
 
     # Load mapping file once
     df_map = load_uploaded_data(mapping_file).copy()
@@ -145,7 +176,7 @@ if main_files and mapping_file:
                 "Exact Match Type",
                 options=["Substring Match", "Exact Match", "Both"],
                 index=0,
-                help="Substring: 'apple' matches in 'pineapple' | Exact: must match exactly"
+                help="Substring: 'apple' matches in 'pineapple' | Exact: must match exactly. Use Exact Match for numeric/ID columns (e.g. template IDs) to avoid accidental partial-number matches."
             )
         
         with algo_col3:
@@ -195,8 +226,10 @@ if main_files and mapping_file:
                         step_progress = st.progress(0.0)
                         
                         df_map_temp = df_map.copy()
-                        df_map_temp['pattern_normalized'] = df_map_temp[pattern_col].astype(str).fillna('').str.strip()
-                        df_main['subject_normalized'] = df_main[subject_col_name].astype(str).fillna('').str.strip()
+                        # Use normalize_value instead of a plain astype(str) so that
+                        # numeric IDs don't pick up float artifacts like "12345.0".
+                        df_map_temp['pattern_normalized'] = df_map_temp[pattern_col].apply(normalize_value)
+                        df_main['subject_normalized'] = df_main[subject_col_name].apply(normalize_value)
                         
                         step_progress.progress(0.5)
                         
