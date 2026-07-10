@@ -14,7 +14,7 @@ import zipfile
 from datetime import datetime
 from openpyxl.styles import PatternFill, Font, Alignment
 
-st.set_page_config(page_title="Subject Line Mapper", page_icon="🧩", layout="wide")
+st.set_page_config(page_title="Renewal Mails Mapper", page_icon="🔖", layout="wide")
 
 if 'mapping_results' not in st.session_state:
     st.session_state.mapping_results = None
@@ -53,7 +53,7 @@ col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("1. Load Main File(s)")
-    st.info("Upload up to 13 files (.csv, .xlsx) - all with same header structure")
+    st.info("Upload (.csv, .xlsx) - all with same header structure")
     main_files = st.file_uploader(
         "Upload Main Sheet(s)",
         type=["csv", "xlsx"],
@@ -68,7 +68,7 @@ with col1:
 
 with col2:
     st.subheader("2. Load Mapping Reference File")
-    st.info("Upload only 1 mapping file (will be used for all main files)")
+    st.info("Upload mapping file (will be used for all main files)")
     mapping_file = st.file_uploader("Upload Mapping Patterns (.csv, .xlsx)", type=["csv", "xlsx"], key="map")
 
 if main_files and mapping_file:
