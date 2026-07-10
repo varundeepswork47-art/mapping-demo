@@ -172,7 +172,7 @@ if main_files and mapping_file:
         # --- MATCHING ALGORITHM SETTINGS ---
         st.subheader(" Matching Algorithm Settings")
         
-        algo_col1, algo_col2, algo_col3 = st.columns(3)
+        algo_col1, algo_col2, algo_col3, algo_col4 = st.columns(4)
         
         with algo_col1:
             fuzzy_threshold = st.slider(
@@ -189,7 +189,7 @@ if main_files and mapping_file:
                 "Exact Match Type",
                 options=["Substring Match", "Exact Match", "Both"],
                 index=0,
-                help="Substring: 'apple' matches in 'pineapple' | Exact: must match exactly. Note: patterns containing {{placeholder}} tokens always use before/after substring logic, since an exact whole-string match isn't possible when part of the pattern is a variable."
+                help="Substring: 'apple' matches in 'pineapple' | Exact: must match exactly. Note: patterns containing {{placeholder}} tokens always use whole-pattern regex matching, since an exact whole-string match isn't possible when part of the pattern is a variable."
             )
         
         with algo_col3:
@@ -197,6 +197,16 @@ if main_files and mapping_file:
                 "Case Sensitive Matching",
                 value=False,
                 help="If unchecked, 'Apple' and 'apple' are treated as the same"
+            )
+
+        with algo_col4:
+            min_fragment_len = st.slider(
+                "Min. Literal Fragment Length",
+                min_value=1,
+                max_value=10,
+                value=3,
+                step=1,
+                help="Patterns with {{placeholders}} are matched using the literal text around them. If every literal chunk of a pattern is shorter than this many characters, that pattern is too generic to match safely and is skipped for exact matching (it can still be reached via fuzzy matching)."
             )
 
         # --- PROCESSING TRIGGER ---
@@ -240,17 +250,9 @@ if main_files and mapping_file:
                         
                         df_map_temp = df_map.copy()
 
-                        # --- Placeholder-aware extraction (from batch script) ---
-                        # Split every pattern into its literal "before" and "after"
-                        # fragments around any {{...}} tokens, then clean both
-                        # fragments the same way the subject text is cleaned so
-                        # they can be reliably compared.
-                        before_raw, after_raw = zip(*df_map_temp[pattern_col].apply(extract_parts))
-                        df_map_temp['before_clean'] = [clean_text(b, case_sensitive) for b in before_raw]
-                        df_map_temp['after_clean'] = [clean_text(a, case_sensitive) for a in after_raw]
-
-                        # Subject text normalized with the same cleaning function
-                        # so both sides of the comparison are apples-to-apples.
+                        # Subject text normalized with the shared cleaning
+                        # function so pattern fragments and subject text are
+                        # apples-to-apples (same alphanumeric-only cleaning).
                         df_main['subject_normalized'] = df_main[subject_col_name].astype(str).fillna('').apply(
                             lambda t: clean_text(t, case_sensitive)
                         )
@@ -258,23 +260,88 @@ if main_files and mapping_file:
                         step_progress.progress(1.0)
                         step_progress.empty()
                         
-                        # Build lookup list for exact/substring matching, and a
-                        # deduped fuzzy candidate list for the fallback phase.
-                        status.write(" Step 2/5: Building lookup dictionary...")
+                        # Build a compiled regex per pattern that keeps EVERY
+                        # literal fragment (not just the first/last), requires
+                        # them to appear in the correct order, and wraps each
+                        # fragment in \b word boundaries so short fragments
+                        # can't match inside unrelated words (e.g. "re" no
+                        # longer matches inside "renewal", "reminder", etc).
+                        # {{placeholder}} tokens become a ".*?" wildcard gap.
+                        # Also build a deduped fuzzy candidate list for the
+                        # fallback phase.
+                        status.write(" Step 2/5: Building pattern regex lookup...")
                         step_progress = st.progress(0.0)
-                        
-                        patterns_items = []          # list of (before, after, output_dict)
+
+                        regex_flags = 0 if case_sensitive else re.IGNORECASE
+
+                        patterns_items = []          # list of (compiled_regex, output_dict)
                         fuzzy_text_to_output = {}     # dedup map for fuzzy candidates
                         patterns_list_fuzzy = []
                         duplicate_count = 0
+                        skipped_generic_count = 0
 
                         for idx, row in df_map_temp.iterrows():
-                            before = row['before_clean']
-                            after = row['after_clean']
+                            raw_pattern = str(row[pattern_col])
                             output_values = {col: row[col] for col in selected_output_cols}
-                            patterns_items.append((before, after, output_values))
 
-                            fuzzy_text = (before + " " + after).strip()
+                            # Split, keeping the {{...}} tokens so we know
+                            # exactly where each wildcard gap belongs.
+                            segments = re.split(r"(\{\{.*?\}\})", raw_pattern)
+
+                            regex_parts = []
+                            literal_fragments = []
+                            has_strong_fragment = False
+
+                            for seg in segments:
+                                if re.fullmatch(r"\{\{.*?\}\}", seg):
+                                    regex_parts.append(r".*?")
+                                else:
+                                    cleaned = clean_text(seg, case_sensitive)
+                                    if not cleaned:
+                                        continue
+                                    literal_fragments.append(cleaned)
+                                    if len(cleaned) >= min_fragment_len:
+                                        has_strong_fragment = True
+                                    regex_parts.append(r"\b" + re.escape(cleaned) + r"\b")
+
+                            if not literal_fragments:
+                                # Pattern is 100% placeholder - nothing to
+                                # anchor on, can't be matched safely at all.
+                                skipped_generic_count += 1
+                                continue
+
+                            if not has_strong_fragment:
+                                # Every literal chunk is shorter than the
+                                # minimum fragment length - too generic to
+                                # trust for exact matching (this is what was
+                                # causing unrelated subjects to match).
+                                skipped_generic_count += 1
+                            else:
+                                has_placeholder = "{{" in raw_pattern
+                                if not has_placeholder and exact_match_type == "Exact Match":
+                                    # Plain pattern (no {{placeholder}}) and
+                                    # the user wants a true whole-string
+                                    # match, not "appears somewhere".
+                                    regex_str = r"^\s*" + re.escape(literal_fragments[0]) + r"\s*$"
+                                else:
+                                    # Substring/Both, or any pattern that has
+                                    # a placeholder (whole-string exact match
+                                    # isn't meaningful when part of it is a
+                                    # variable) - use the word-boundary,
+                                    # ordered-fragment regex built above.
+                                    regex_str = "".join(regex_parts)
+                                try:
+                                    compiled = re.compile(regex_str, regex_flags)
+                                    patterns_items.append((compiled, output_values))
+                                except re.error:
+                                    skipped_generic_count += 1
+
+                            # Fuzzy candidate always built (even for
+                            # generic/skipped patterns) since fuzzy scoring
+                            # is similarity-based, not containment-based, so
+                            # it's far less prone to the same false-positive
+                            # problem.
+                            fuzzy_text = " ".join(literal_fragments).strip()
                             if fuzzy_text:
                                 if fuzzy_text not in fuzzy_text_to_output:
                                     fuzzy_text_to_output[fuzzy_text] = output_values
@@ -284,6 +351,8 @@ if main_files and mapping_file:
 
                         if duplicate_count > 0:
                             status.write(f"  ⚠️ {duplicate_count} duplicate pattern(s) detected — first occurrence used for fuzzy matching.")
+                        if skipped_generic_count > 0:
+                            status.write(f"  ⚠️ {skipped_generic_count} pattern(s) skipped for exact matching — literal text too short/generic (below {min_fragment_len} chars). Still reachable via fuzzy matching. Lower the 'Min. Literal Fragment Length' setting if you want these used for exact matching too.")
                         
                         step_progress.progress(1.0)
                         step_progress.empty()
@@ -292,41 +361,24 @@ if main_files and mapping_file:
                         for col in selected_output_cols:
                             df_main[f'mapped_{col}'] = None
 
-                        # --- STEP 1: EXACT / SUBSTRING / PLACEHOLDER MATCHING ---
-                        status.write(" Step 3/5: Executing Direct Fast-Lookup (Exact + Before/After Placeholder Matching)...")
+                        # --- STEP 1: EXACT / REGEX PLACEHOLDER MATCHING ---
+                        status.write(" Step 3/5: Executing Direct Fast-Lookup (Full-Pattern Regex Matching)...")
                         step_progress = st.progress(0.0)
 
                         def check_exact_match(subj):
-                            """Check for exact, substring, or before/after
-                            placeholder matches, in mapping-row order (first
-                            match wins)."""
+                            """Check each compiled pattern regex against the
+                            subject, in mapping-row order (first match
+                            wins). Word-boundaries + fragment order are
+                            already baked into the compiled regex."""
                             if pd.isna(subj) or subj == '':
                                 return {col: None for col in selected_output_cols}
-                            
-                            subj_str = subj  # already cleaned upstream
-                            
-                            for before, after, output_dict in patterns_items:
-                                if not before:
-                                    continue
 
-                                if after:
-                                    # Pattern had a {{placeholder}} - match on
-                                    # both literal fragments being present,
-                                    # same approach as the batch script.
-                                    match_found = (before in subj_str) and (after in subj_str)
-                                else:
-                                    # Plain pattern, no placeholder - honor the
-                                    # user's chosen match type as before.
-                                    if exact_match_type == "Substring Match":
-                                        match_found = before in subj_str
-                                    elif exact_match_type == "Exact Match":
-                                        match_found = before == subj_str
-                                    else:  # Both
-                                        match_found = (before in subj_str) or (before == subj_str)
-                                
-                                if match_found:
+                            subj_str = subj  # already cleaned upstream
+
+                            for compiled, output_dict in patterns_items:
+                                if compiled.search(subj_str):
                                     return output_dict
-                            
+
                             return {col: None for col in selected_output_cols}
 
                         # Apply matching with progress
