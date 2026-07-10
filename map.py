@@ -12,6 +12,7 @@ except ModuleNotFoundError:
 import streamlit as st
 import pandas as pd
 import numpy as np
+import re
 import io
 import zipfile
 from datetime import datetime
@@ -29,12 +30,55 @@ if 'file_status' not in st.session_state:
 st.title("String Mapping Dashboard")
 st.markdown("Upload your Main File(s) and a Mapping Reference File to reconcile text values using exact and fuzzy matching algorithms.")
 
+# =====================================================================
+# === TEMPLATE-PATTERN HELPERS (merged in from the batch script) ====
+# =====================================================================
+# Mapping patterns may contain {{placeholder}} tokens (e.g.
+# "Your {{product}} renews on {{date}}"). These helpers pull out the
+# literal text that comes BEFORE and AFTER the placeholder(s) so that
+# matching can be done on the stable parts of the string instead of
+# failing outright because the literal "{{...}}" text never appears
+# in a real subject line. Patterns with no placeholder at all simply
+# collapse to a single "before" fragment with an empty "after", which
+# preserves the original plain substring/exact-match behavior.
+
+def clean_text(text, case_sensitive=False):
+    """Normalize text the same way the batch script does: strip
+    asterisks, collapse everything down to alphanumerics + spaces,
+    and squash whitespace. Honors the app's case-sensitivity toggle."""
+    text = str(text)
+    if not case_sensitive:
+        text = text.lower()
+        text = re.sub(r"\*+", " ", text)
+        text = re.sub(r"[^a-z0-9 ]", " ", text)
+    else:
+        text = re.sub(r"\*+", " ", text)
+        text = re.sub(r"[^a-zA-Z0-9 ]", " ", text)
+    text = re.sub(r"\s+", " ", text).strip()
+    return text
+
+
+def extract_parts(pattern):
+    """Split a mapping pattern on {{...}} placeholders and return the
+    first literal chunk ('before') and last literal chunk ('after').
+    Patterns without a placeholder return (whole_pattern, '')."""
+    parts = re.split(r"\{\{.*?\}\}", str(pattern))
+    parts = [p.strip() for p in parts if p.strip() != ""]
+
+    if len(parts) == 1:
+        return parts[0], ""
+    elif len(parts) >= 2:
+        return parts[0], parts[-1]
+    else:
+        return "", ""
+
+
 # --- FILE UPLOAD SECTION ---
 col1, col2 = st.columns(2)
 
 with col1:
     st.subheader("1. Load Main File(s)")
-    st.info("Upload (.csv, .xlsx) - all with same header structure")
+    st.info("Upload up to 13 files (.csv, .xlsx) - all with same header structure")
     main_files = st.file_uploader(
         "Upload Main Sheet(s)",
         type=["csv", "xlsx"],
@@ -145,7 +189,7 @@ if main_files and mapping_file:
                 "Exact Match Type",
                 options=["Substring Match", "Exact Match", "Both"],
                 index=0,
-                help="Substring: 'apple' matches in 'pineapple' | Exact: must match exactly"
+                help="Substring: 'apple' matches in 'pineapple' | Exact: must match exactly. Note: patterns containing {{placeholder}} tokens always use before/after substring logic, since an exact whole-string match isn't possible when part of the pattern is a variable."
             )
         
         with algo_col3:
@@ -191,32 +235,55 @@ if main_files and mapping_file:
                             continue
                         
                         # Preprocessing
-                        status.write(" Step 1/5: Cleaning and normalizing text keys...")
+                        status.write(" Step 1/5: Cleaning and normalizing text keys (incl. {{placeholder}} extraction)...")
                         step_progress = st.progress(0.0)
                         
                         df_map_temp = df_map.copy()
-                        df_map_temp['pattern_normalized'] = df_map_temp[pattern_col].astype(str).fillna('').str.strip()
-                        df_main['subject_normalized'] = df_main[subject_col_name].astype(str).fillna('').str.strip()
-                        
-                        step_progress.progress(0.5)
-                        
-                        # Apply case sensitivity
-                        if not case_sensitive:
-                            df_map_temp['pattern_normalized'] = df_map_temp['pattern_normalized'].str.lower()
-                            df_main['subject_normalized'] = df_main['subject_normalized'].str.lower()
+
+                        # --- Placeholder-aware extraction (from batch script) ---
+                        # Split every pattern into its literal "before" and "after"
+                        # fragments around any {{...}} tokens, then clean both
+                        # fragments the same way the subject text is cleaned so
+                        # they can be reliably compared.
+                        before_raw, after_raw = zip(*df_map_temp[pattern_col].apply(extract_parts))
+                        df_map_temp['before_clean'] = [clean_text(b, case_sensitive) for b in before_raw]
+                        df_map_temp['after_clean'] = [clean_text(a, case_sensitive) for a in after_raw]
+
+                        # Subject text normalized with the same cleaning function
+                        # so both sides of the comparison are apples-to-apples.
+                        df_main['subject_normalized'] = df_main[subject_col_name].astype(str).fillna('').apply(
+                            lambda t: clean_text(t, case_sensitive)
+                        )
                         
                         step_progress.progress(1.0)
                         step_progress.empty()
                         
-                        # Hash Lookup generation for selected output columns
+                        # Build lookup list for exact/substring matching, and a
+                        # deduped fuzzy candidate list for the fallback phase.
                         status.write(" Step 2/5: Building lookup dictionary...")
                         step_progress = st.progress(0.0)
                         
-                        exact_match_dict = {}
+                        patterns_items = []          # list of (before, after, output_dict)
+                        fuzzy_text_to_output = {}     # dedup map for fuzzy candidates
+                        patterns_list_fuzzy = []
+                        duplicate_count = 0
+
                         for idx, row in df_map_temp.iterrows():
-                            pattern_key = row['pattern_normalized']
+                            before = row['before_clean']
+                            after = row['after_clean']
                             output_values = {col: row[col] for col in selected_output_cols}
-                            exact_match_dict[pattern_key] = output_values
+                            patterns_items.append((before, after, output_values))
+
+                            fuzzy_text = (before + " " + after).strip()
+                            if fuzzy_text:
+                                if fuzzy_text not in fuzzy_text_to_output:
+                                    fuzzy_text_to_output[fuzzy_text] = output_values
+                                    patterns_list_fuzzy.append(fuzzy_text)
+                                else:
+                                    duplicate_count += 1
+
+                        if duplicate_count > 0:
+                            status.write(f"  ⚠️ {duplicate_count} duplicate pattern(s) detected — first occurrence used for fuzzy matching.")
                         
                         step_progress.progress(1.0)
                         step_progress.empty()
@@ -225,34 +292,37 @@ if main_files and mapping_file:
                         for col in selected_output_cols:
                             df_main[f'mapped_{col}'] = None
 
-                        # --- STEP 1: EXACT MATCHING ---
-                        status.write(" Step 3/5: Executing Direct Fast-Lookup (Exact Matching)...")
+                        # --- STEP 1: EXACT / SUBSTRING / PLACEHOLDER MATCHING ---
+                        status.write(" Step 3/5: Executing Direct Fast-Lookup (Exact + Before/After Placeholder Matching)...")
                         step_progress = st.progress(0.0)
-                        
-                        patterns_items = list(exact_match_dict.items())
-                        
 
                         def check_exact_match(subj):
-                            """Check for exact or substring matches based on user selection"""
+                            """Check for exact, substring, or before/after
+                            placeholder matches, in mapping-row order (first
+                            match wins)."""
                             if pd.isna(subj) or subj == '':
                                 return {col: None for col in selected_output_cols}
                             
-                            subj_str = str(subj).strip()
-                            if not case_sensitive:
-                                subj_str = subj_str.lower()
+                            subj_str = subj  # already cleaned upstream
                             
-                            for patt, output_dict in patterns_items:
-                                if patt == '' or patt is None:
+                            for before, after, output_dict in patterns_items:
+                                if not before:
                                     continue
-                                
-                                match_found = False
-                                
-                                if exact_match_type == "Substring Match":
-                                    match_found = patt in subj_str
-                                elif exact_match_type == "Exact Match":
-                                    match_found = patt == subj_str
-                                elif exact_match_type == "Both":
-                                    match_found = (patt in subj_str) or (patt == subj_str)
+
+                                if after:
+                                    # Pattern had a {{placeholder}} - match on
+                                    # both literal fragments being present,
+                                    # same approach as the batch script.
+                                    match_found = (before in subj_str) and (after in subj_str)
+                                else:
+                                    # Plain pattern, no placeholder - honor the
+                                    # user's chosen match type as before.
+                                    if exact_match_type == "Substring Match":
+                                        match_found = before in subj_str
+                                    elif exact_match_type == "Exact Match":
+                                        match_found = before == subj_str
+                                    else:  # Both
+                                        match_found = (before in subj_str) or (before == subj_str)
                                 
                                 if match_found:
                                     return output_dict
@@ -274,7 +344,11 @@ if main_files and mapping_file:
 
                         # Count matches
                         exact_matches_per_col = {col: (df_main[f'mapped_{col}'].notna()).sum() for col in selected_output_cols}
-                        unmatched_mask = df_main['mapped_' + selected_output_cols[0]].isna()
+                        # A row is only "unmatched" if ALL selected output
+                        # columns came back empty - checking just the first
+                        # column would wrongly flag legitimately-blank values
+                        # in that column as no-match.
+                        unmatched_mask = df_main[[f'mapped_{c}' for c in selected_output_cols]].isna().all(axis=1)
                         unmatched_count = unmatched_mask.sum()
 
                         status.write(f"✓ Exact Match Phase Closed")
@@ -286,7 +360,6 @@ if main_files and mapping_file:
                         if unmatched_count > 0:
                             status.write(" Step 4/5: Spinning up RapidFuzz text vector alignment...")
                             
-                            patterns_list = df_map_temp['pattern_normalized'].tolist()
                             unmatched_indices = df_main[unmatched_mask].index
                             
                             # Pre-extract values
@@ -301,14 +374,14 @@ if main_files and mapping_file:
                             for idx, subj in enumerate(subjects_unmatched):
                                 best_match = process.extractOne(
                                     subj,
-                                    patterns_list,
+                                    patterns_list_fuzzy,
                                     scorer=fuzz.token_set_ratio,
                                     score_cutoff=fuzzy_threshold
                                 )
                                 
                                 if best_match:
                                     m_pattern, score, _ = best_match
-                                    matched_outputs = exact_match_dict[m_pattern]
+                                    matched_outputs = fuzzy_text_to_output[m_pattern]
                                     for col in selected_output_cols:
                                         fuzzy_results_dict[col].append(matched_outputs.get(col))
                                 else:
@@ -513,7 +586,7 @@ if main_files and mapping_file:
                         )
             
             # --- DETAILED STATISTICS ---
-            st.subheader("📋 Detailed Settings Used")
+            st.subheader("Detailed Settings Used")
             settings_col1, settings_col2 = st.columns(2)
             
             with settings_col1:
