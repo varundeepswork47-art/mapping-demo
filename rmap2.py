@@ -21,7 +21,7 @@ if 'mapping_results' not in st.session_state:
 if 'file_status' not in st.session_state:
     st.session_state.file_status = None
 
-st.title("Subject Line Mapping Dashboard")
+st.title("Renewal Mapping Dashboard")
 st.markdown("Upload your Main File(s) and a Mapping Reference File to tag rows")
 
 # =====================================================================
