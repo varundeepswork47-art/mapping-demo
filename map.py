@@ -22,7 +22,7 @@ if 'file_status' not in st.session_state:
     st.session_state.file_status = None
 
 st.title("Subject Line Mapping Dashboard")
-st.markdown("Upload your Main File(s) and a Mapping Reference File to tag rows based on `{{placeholder}}` patterns.")
+st.markdown("Upload your Main File(s) and a Mapping Reference File to tag rows")
 
 # =====================================================================
 # === CORE MATCHING LOGIC (unchanged from the batch script) =========
