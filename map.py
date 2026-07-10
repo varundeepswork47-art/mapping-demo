@@ -3,7 +3,7 @@ import pandas as pd
 import re
 import io
 
-st.set_page_config(page_title="Subject Line Mapper", page_icon="🧩")
+st.set_page_config(page_title="Subject Line Mapper", page_icon="📬")
 st.title("Subject Line Mapper")
 
 # === CLEAN FUNCTION ===
